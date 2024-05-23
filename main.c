@@ -2,7 +2,6 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
-#include <stdlib.h>
 
 #include <GL/gl.h>
 #include <GLES3/gl32.h>
@@ -15,6 +14,10 @@ typedef uint32_t  u32;
 typedef ptrdiff_t size;
 
 typedef struct { size len; u8 *data; } s8;
+
+typedef struct { u8 *beg, *end; } Arena;
+
+#include "util.c"
 
 #ifdef __unix__
 #include "os_unix.c"
@@ -128,7 +131,7 @@ spawn_window(void)
 
 	/* disable vsync */
 	glfwSwapInterval(0);
-	
+
 	glfwSetFramebufferSizeCallback(g_glctx.window, fb_callback);
 	glfwSetKeyCallback(g_glctx.window, key_callback);
 	//glfwSetScrollCallback(glctx.window, scroll_callback);
@@ -142,7 +145,7 @@ spawn_window(void)
 }
 
 static u32
-compile_shader(u32 type, s8 s)
+compile_shader(Arena a, u32 type, s8 s)
 {
 	u32 sid = glCreateShader(type);
 	glShaderSource(sid, 1, (const char **)&s.data, (int *)&s.len);
@@ -153,12 +156,11 @@ compile_shader(u32 type, s8 s)
 	if (res != GL_TRUE) {
 		i32 len, len2;
 		glGetShaderiv(sid, GL_INFO_LOG_LENGTH, &len);
-		char *data = malloc(len);
+		char *data = alloc(&a, char, len);
 		glGetShaderInfoLog(sid, len, &len2, data);
 		fputs("compile_shader: ", stderr);
 		fwrite(data, 1, len2, stderr);
 		fputc('\n', stderr);
-		free(data);
 		glDeleteShader(sid);
 		return 0;
 	}
@@ -167,15 +169,15 @@ compile_shader(u32 type, s8 s)
 }
 
 static i32
-program_from_files(char *vert, char *frag)
+program_from_files(Arena a, char *vert, size vfilesize, char *frag, size ffilesize)
 {
-	s8 vertex   = os_read_file(vert);
-	s8 fragment = os_read_file(frag);
+	s8 vertex   = os_read_file(&a, vert, vfilesize);
+	s8 fragment = os_read_file(&a, frag, ffilesize);
 	if (vertex.len == 0 || fragment.len == 0)
 		return -1;
 	i32 pid = glCreateProgram();
-	u32 vid = compile_shader(GL_VERTEX_SHADER,   vertex);
-	u32 fid = compile_shader(GL_FRAGMENT_SHADER, fragment);
+	u32 vid = compile_shader(a, GL_VERTEX_SHADER,   vertex);
+	u32 fid = compile_shader(a, GL_FRAGMENT_SHADER, fragment);
 
 	if (fid == 0 || vid == 0)
 		return -1;
@@ -192,30 +194,26 @@ program_from_files(char *vert, char *frag)
 	if (g_glctx.u_screen_dim != -1)
 		glUniform2ui(g_glctx.u_screen_dim, g_glctx.width, g_glctx.height);
 
-	free(vertex.data);
-	free(fragment.data);
-
 	return pid;
 }
 
-static os_file_stats
-check_and_update_shader(os_file_stats test_stats, char *test_file)
+static Arena
+get_arena(void)
 {
-	os_file_stats new_stats = os_get_file_stats(test_file);
-	if (os_compare_filetime(test_stats.timestamp, new_stats.timestamp)) {
-		i32 pid = program_from_files("vert.glsl", "frag.glsl");
-		if (pid > 0) {
-			glDeleteProgram(g_glctx.pid);
-			g_glctx.pid = pid;
-			glUseProgram(g_glctx.pid);
-		}
-	}
-	return new_stats;
+	static u8 *data[32 * 1024];
+	Arena a = {0};
+	a.beg = (u8 *)data;
+	/* cleanup up your dirty laundry boy!! */
+	asm("" : "+r"(a.beg));
+	a.end = a.beg + 32 * 1024;
+	return a;
 }
 
 int
 main(void)
 {
+	Arena memory = get_arena();
+
 	if (!glfwInit())
 		return -1;
 	glfwSetErrorCallback(error_callback);
@@ -229,7 +227,9 @@ main(void)
 
 	os_file_stats vert_stats = os_get_file_stats("vert.glsl");
 	os_file_stats frag_stats = os_get_file_stats("frag.glsl");
-	g_glctx.pid = program_from_files("vert.glsl", "frag.glsl");
+	g_glctx.pid = program_from_files(memory,
+	                                 "vert.glsl", vert_stats.filesize,
+	                                 "frag.glsl", frag_stats.filesize);
 	if (g_glctx.pid == -1) {
 		glfwTerminate();
 		return -1;
@@ -249,8 +249,21 @@ main(void)
 			fcount = 0;
 		}
 
-		vert_stats = check_and_update_shader(vert_stats, "vert.glsl");
-		frag_stats = check_and_update_shader(frag_stats, "frag.glsl");
+		os_file_stats new_vert = os_get_file_stats("vert.glsl");
+		os_file_stats new_frag = os_get_file_stats("frag.glsl");
+		if (os_compare_filetime(vert_stats.timestamp, new_vert.timestamp) ||
+		    os_compare_filetime(frag_stats.timestamp, new_frag.timestamp)) {
+			i32 pid = program_from_files(memory,
+			                             "vert.glsl", new_vert.filesize,
+			                             "frag.glsl", new_frag.filesize);
+			if (pid > 0) {
+				frag_stats = new_frag;
+				vert_stats = new_vert;
+				glDeleteProgram(g_glctx.pid);
+				g_glctx.pid = pid;
+				glUseProgram(g_glctx.pid);
+			}
+		}
 
 		clear_colour(g_glctx.clear_colour);
 		glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
