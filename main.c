@@ -1,10 +1,8 @@
 /* see LICENSE for licensing details */
-#include <fcntl.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <unistd.h>
 
 #include <GL/gl.h>
 #include <GLES3/gl32.h>
@@ -17,6 +15,12 @@ typedef uint32_t  u32;
 typedef ptrdiff_t size;
 
 typedef struct { size len; u8 *data; } s8;
+
+#ifdef __unix__
+#include "os_unix.c"
+#else
+#error Unsupported Platform!
+#endif
 
 typedef union {
 	struct { u8 a, b, g, r; };
@@ -137,29 +141,6 @@ spawn_window(void)
 	return 0;
 }
 
-static s8
-read_whole_file(char *file)
-{
-	s8 ret = {0};
-	i32 fd = open(file, O_RDONLY);
-	if (fd < 0)
-		return ret;
-	ret.len  = lseek(fd, 0L, SEEK_END);
-	ret.data = malloc(ret.len);
-	lseek(fd, 0L, SEEK_SET);
-	if (ret.data == NULL) {
-		ret.len = 0;
-		close(fd);
-		return ret;
-	}
-	if (ret.len != read(fd, ret.data, ret.len)) {
-		ret.len = 0;
-		free(ret.data);
-	}
-	close(fd);
-	return ret;
-}
-
 static u32
 compile_shader(u32 type, s8 s)
 {
@@ -188,8 +169,8 @@ compile_shader(u32 type, s8 s)
 static i32
 program_from_files(char *vert, char *frag)
 {
-	s8 vertex   = read_whole_file(vert);
-	s8 fragment = read_whole_file(frag);
+	s8 vertex   = os_read_file(vert);
+	s8 fragment = os_read_file(frag);
 	if (vertex.len == 0 || fragment.len == 0)
 		return -1;
 	i32 pid = glCreateProgram();
@@ -217,6 +198,21 @@ program_from_files(char *vert, char *frag)
 	return pid;
 }
 
+static os_file_stats
+check_and_update_shader(os_file_stats test_stats, char *test_file)
+{
+	os_file_stats new_stats = os_get_file_stats(test_file);
+	if (os_compare_filetime(test_stats.timestamp, new_stats.timestamp)) {
+		i32 pid = program_from_files("vert.glsl", "frag.glsl");
+		if (pid > 0) {
+			glDeleteProgram(g_glctx.pid);
+			g_glctx.pid = pid;
+			glUseProgram(g_glctx.pid);
+		}
+	}
+	return new_stats;
+}
+
 int
 main(void)
 {
@@ -231,6 +227,8 @@ main(void)
 		return -1;
 	}
 
+	os_file_stats vert_stats = os_get_file_stats("vert.glsl");
+	os_file_stats frag_stats = os_get_file_stats("frag.glsl");
 	g_glctx.pid = program_from_files("vert.glsl", "frag.glsl");
 	if (g_glctx.pid == -1) {
 		glfwTerminate();
@@ -250,7 +248,10 @@ main(void)
 			       1 / dt, dt * 1e3);
 			fcount = 0;
 		}
-		
+
+		vert_stats = check_and_update_shader(vert_stats, "vert.glsl");
+		frag_stats = check_and_update_shader(frag_stats, "frag.glsl");
+
 		clear_colour(g_glctx.clear_colour);
 		glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 		glfwSwapBuffers(g_glctx.window);
