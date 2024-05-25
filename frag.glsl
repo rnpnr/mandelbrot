@@ -4,7 +4,8 @@
 out vec4 colour;
 
 uniform uvec2 u_screen_dim;
-uniform vec2 u_pos;
+uniform vec2  u_top_left;
+uniform vec2  u_bottom_right;
 uniform float u_zoom = 1.0;
 
 vec3 wavelength2rgb(float lambda)
@@ -54,16 +55,9 @@ vec3 wavelength2rgb(float lambda)
 
 vec2 map_mandelbrot(vec2 v)
 {
-	vec2 scale = vec2(3.5, 3) / u_zoom;
-	vec2 delta = vec2(0);
-
-	delta.x = - 0.765 - scale.x / 2;
-	delta.y = - scale.y / 2;
-	delta += u_pos / u_zoom;
-
-	float x = scale.x * v.x;
-	float y = scale.y * v.y;
-	return vec2(x, y) + delta;
+	vec2 scale = abs((u_top_left - u_bottom_right) / u_zoom);
+	v *= scale;
+	return vec2(u_top_left.x, u_bottom_right.y) + v;
 }
 
 void main()
