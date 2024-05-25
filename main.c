@@ -122,6 +122,7 @@ spawn_window(void)
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
+	g_glctx.u_screen_dim = -1;
 	g_glctx.window = glfwCreateWindow(g_glctx.width, g_glctx.height,
 	                                  "Mandelbrot Viewer", NULL, NULL);
 	if (g_glctx.window == NULL)
@@ -188,11 +189,6 @@ program_from_files(Arena a, char *vert, size vfilesize, char *frag, size ffilesi
 	glValidateProgram(pid);
 	glDeleteShader(vid);
 	glDeleteShader(fid);
-	glUseProgram(pid);
-
-	g_glctx.u_screen_dim = glGetUniformLocation(pid, "u_screen_dim");
-	if (g_glctx.u_screen_dim != -1)
-		glUniform2ui(g_glctx.u_screen_dim, g_glctx.width, g_glctx.height);
 
 	return pid;
 }
@@ -234,6 +230,10 @@ main(void)
 		glfwTerminate();
 		return -1;
 	}
+	glUseProgram(g_glctx.pid);
+	g_glctx.u_screen_dim = glGetUniformLocation(g_glctx.pid, "u_screen_dim");
+	if (g_glctx.u_screen_dim != -1)
+		glUniform2ui(g_glctx.u_screen_dim, g_glctx.width, g_glctx.height);
 
 	u32 fcount = 0;
 	f32 last_time = 0;
@@ -262,6 +262,10 @@ main(void)
 				glDeleteProgram(g_glctx.pid);
 				g_glctx.pid = pid;
 				glUseProgram(g_glctx.pid);
+				i32 usd = glGetUniformLocation(pid, "u_screen_dim");
+				g_glctx.u_screen_dim = usd;
+				if (usd != -1)
+					glUniform2ui(usd, g_glctx.width, g_glctx.height);
 			}
 		}
 
