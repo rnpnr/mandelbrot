@@ -8,6 +8,7 @@
 #include <GLFW/glfw3.h>
 
 typedef float     f32;
+typedef double    f64;
 typedef uint8_t   u8;
 typedef int32_t   i32;
 typedef uint32_t  u32;
@@ -35,7 +36,9 @@ static struct {
 	u32 vao, vbo;
 	i32 pid;
 	i32 height, width;
-	i32 u_screen_dim;
+	i32 u_screen_dim, u_zoom, u_pos;
+	struct { f32 x, y; } cursor;
+	f32 zoom;
 	Colour clear_colour;
 } g_glctx;
 
@@ -66,16 +69,65 @@ fb_callback(GLFWwindow *win, i32 w, i32 h)
 	g_glctx.height = h;
 	g_glctx.width  = w;
 	glViewport(0, 0, w, h);
-	if (g_glctx.u_screen_dim != -1)
-		glUniform2ui(g_glctx.u_screen_dim, w, h);
 }
 
 static void
 key_callback(GLFWwindow *win, i32 key, i32 sc, i32 action, i32 mod)
 {
-	(void)sc; (void)mod;
-	if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
-		glfwSetWindowShouldClose(win, GL_TRUE);
+	(void)sc;
+
+	f32 scale = (mod & GLFW_MOD_SHIFT) ? 3 : 1;
+
+	switch (key) {
+	case GLFW_KEY_ESCAPE:
+		if (action == GLFW_PRESS)
+			glfwSetWindowShouldClose(win, GL_TRUE);
+		break;
+	case GLFW_KEY_W:
+		if (action == GLFW_PRESS || action == GLFW_REPEAT)
+			g_glctx.cursor.y += scale * 0.05;
+		break;
+	case GLFW_KEY_A:
+		if (action == GLFW_PRESS || action == GLFW_REPEAT)
+			g_glctx.cursor.x -= scale * 0.05;
+		break;
+	case GLFW_KEY_S:
+		if (action == GLFW_PRESS || action == GLFW_REPEAT)
+			g_glctx.cursor.y -= scale * 0.05;
+		break;
+	case GLFW_KEY_D:
+		if (action == GLFW_PRESS || action == GLFW_REPEAT)
+			g_glctx.cursor.x += scale * 0.05;
+		break;
+	}
+}
+
+static void
+scroll_callback(GLFWwindow *win, f64 xdelta, f64 ydelta)
+{
+	f32 scale = glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) ? 5 : 1;
+	g_glctx.zoom += scale * ydelta;
+	if (g_glctx.zoom < 1.0) g_glctx.zoom = 1.0;
+}
+
+static void
+mouse_button_callback(GLFWwindow *win, i32 btn, i32 act, i32 mod)
+{
+	if (btn == GLFW_MOUSE_BUTTON_LEFT && act == GLFW_PRESS) {
+		f64 xpos, ypos;
+		glfwGetCursorPos(g_glctx.window, &xpos, &ypos);
+		f32 delta_x = 2 * xpos / g_glctx.width - 1;
+		f32 delta_y = 2 * ypos / g_glctx.height - 1;
+		f32 scale = 1; //g_glctx.zoom;
+		g_glctx.cursor.x -= scale * delta_x;
+		g_glctx.cursor.y -= scale * delta_y;
+	}
+
+	if (btn == GLFW_MOUSE_BUTTON_RIGHT && act == GLFW_PRESS) {
+		g_glctx.zoom = 1;
+		g_glctx.cursor.x = 0;
+		g_glctx.cursor.y = 0;
+	}
 }
 
 static void
@@ -135,7 +187,8 @@ spawn_window(void)
 
 	glfwSetFramebufferSizeCallback(g_glctx.window, fb_callback);
 	glfwSetKeyCallback(g_glctx.window, key_callback);
-	//glfwSetScrollCallback(glctx.window, scroll_callback);
+	glfwSetScrollCallback(g_glctx.window, scroll_callback);
+	glfwSetMouseButtonCallback(g_glctx.window, mouse_button_callback);
 
 	g_glctx.clear_colour = (Colour){ .r = 64, .b = 64, .g = 64, .a = 255 };
 	clear_colour(g_glctx.clear_colour);
@@ -205,6 +258,14 @@ get_arena(void)
 	return a;
 }
 
+static void
+validate_uniforms(void)
+{
+	g_glctx.u_screen_dim = glGetUniformLocation(g_glctx.pid, "u_screen_dim");
+	g_glctx.u_zoom       = glGetUniformLocation(g_glctx.pid, "u_zoom");
+	g_glctx.u_pos        = glGetUniformLocation(g_glctx.pid, "u_pos");
+}
+
 int
 main(void)
 {
@@ -231,9 +292,8 @@ main(void)
 		return -1;
 	}
 	glUseProgram(g_glctx.pid);
-	g_glctx.u_screen_dim = glGetUniformLocation(g_glctx.pid, "u_screen_dim");
-	if (g_glctx.u_screen_dim != -1)
-		glUniform2ui(g_glctx.u_screen_dim, g_glctx.width, g_glctx.height);
+	validate_uniforms();
+	g_glctx.zoom = 1.0;
 
 	u32 fcount = 0;
 	f32 last_time = 0;
@@ -244,8 +304,9 @@ main(void)
 		f32 dt = current_time - last_time;
 		last_time = current_time;
 		if (++fcount > 1000) {
-			printf("FPS: %0.03f | dt = %0.03f [ms]\n",
-			       1 / dt, dt * 1e3);
+			printf("FPS: %0.03f | dt = %0.03f [ms] | cursor = { "
+			       "%0.04f, %0.04f, %0.01f }\n", 1 / dt, dt * 1e3,
+			       g_glctx.cursor.x, g_glctx.cursor.y, g_glctx.zoom);
 			fcount = 0;
 		}
 
@@ -262,13 +323,13 @@ main(void)
 				glDeleteProgram(g_glctx.pid);
 				g_glctx.pid = pid;
 				glUseProgram(g_glctx.pid);
-				i32 usd = glGetUniformLocation(pid, "u_screen_dim");
-				g_glctx.u_screen_dim = usd;
-				if (usd != -1)
-					glUniform2ui(usd, g_glctx.width, g_glctx.height);
+				validate_uniforms();
 			}
 		}
 
+		glUniform2fv(g_glctx.u_pos, 1, (f32 *)&g_glctx.cursor);
+		glUniform2ui(g_glctx.u_screen_dim, g_glctx.width, g_glctx.height);
+		glUniform1f(g_glctx.u_zoom, g_glctx.zoom);
 		clear_colour(g_glctx.clear_colour);
 		glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 		glfwSwapBuffers(g_glctx.window);

@@ -4,24 +4,8 @@
 out vec4 colour;
 
 uniform uvec2 u_screen_dim;
-
-vec2 map_mandelbrot(vec2 v, float aspect)
-{
-	/* midpoint is (-0.765, 0) */
-	/* x is in [-2.00, 0.47] */
-	/* x new [-2.5, 1] -> 3.5 */
-	/* y is in [-1.12, 1.12]  */
-	/* y new [-1.5, 1.5] -> 3.0 */
-	vec2 delta = vec2(0);
-
-	float desired_aspect = 3.5 / 3;
-	delta.x = -0.765 - 3.5 * desired_aspect / 2;
-	delta.y = -1.5;
-
-	float x = v.x * 3.5 * desired_aspect;
-	float y = v.y * 3;
-	return vec2(x, y) + delta;
-}
+uniform vec2 u_pos;
+uniform float u_zoom = 1.0;
 
 vec3 wavelength2rgb(float lambda)
 {
@@ -68,15 +52,36 @@ vec3 wavelength2rgb(float lambda)
 	return rgb;
 }
 
+vec2 map_mandelbrot(vec2 v)
+{
+	vec2 scale = vec2(3.5, 3) / u_zoom;
+	vec2 delta = vec2(0);
+
+	delta.x = - 0.765 - scale.x / 2;
+	delta.y = - scale.y / 2;
+	delta += u_pos / u_zoom;
+
+	float x = scale.x * v.x;
+	float y = scale.y * v.y;
+	return vec2(x, y) + delta;
+}
+
 void main()
 {
 	float aspect = u_screen_dim.x / u_screen_dim.y;
-	vec2 xy0 = map_mandelbrot(gl_FragCoord.xy / u_screen_dim.xy, aspect);
+	vec2 xy0 = map_mandelbrot(gl_FragCoord.xy / u_screen_dim.xy);
 
 	int i;
 	float xx = 0, yy = 0;
 	vec2 xy  = xy0;
-	for (i = 0; i < 300 && xx + yy < 15.0; i++) {
+	for (i = 0; i < 300 && xx + yy < 10.0; i++) {
+		xx = xy.x * xy.x;
+		yy = xy.y * xy.y;
+		xy = vec2(xx - yy + xy0.x, 2 * xy.x * xy.y + xy0.y);
+	}
+
+	/* extra iterations to reduce error in escape calculation */
+	for (int j = 0; j < 2; j++) {
 		xx = xy.x * xy.x;
 		yy = xy.y * xy.y;
 		xy = vec2(xx - yy + xy0.x, 2 * xy.x * xy.y + xy0.y);
