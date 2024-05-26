@@ -30,6 +30,8 @@ typedef struct { u8 *beg, *end; } Arena;
 #define ABS(x)           ((x) <= 0 ? -(x) : (x))
 #define BETWEEN(x, l, h) ((x) >= (l) && (x) <= (h))
 
+#define EPS 0.00001f
+
 #include "util.c"
 
 #ifdef __unix__
@@ -48,9 +50,10 @@ static struct {
 	u32 vao, vbo;
 	i32 pid;
 	i32 height, width;
-	i32 u_screen_dim, u_zoom, u_top_left, u_bottom_right;
-	f32 zoom;
+	i32 u_screen_dim, u_top_left, u_bottom_right;
+	v2  dP;
 	Rect boundary;
+	f32 zoom;
 	Colour clear_colour;
 } g_glctx;
 
@@ -68,6 +71,12 @@ move_rect(Rect r, v2 delta)
 	r.bottom_right.x += delta.x;
 	r.bottom_right.y += delta.y;
 	return r;
+}
+
+static v2
+sub_v2(v2 a, v2 b)
+{
+	return (v2){ .x = a.x - b.x, .y = a.y - b.y };
 }
 
 static void
@@ -104,8 +113,11 @@ key_callback(GLFWwindow *win, i32 key, i32 sc, i32 action, i32 mod)
 {
 	(void)sc;
 
-	f32 delta = (mod & GLFW_MOD_SHIFT) ? 0.25 : 0.05;
-	delta /= g_glctx.zoom;
+	f32 scale = (mod & GLFW_MOD_SHIFT) ? 1 : 0.5;
+
+	v2 dP = sub_v2(g_glctx.boundary.top_left, g_glctx.boundary.bottom_right);
+	dP.x *= -scale; //g_glctx.zoom;
+	dP.y *=  scale; //g_glctx.zoom;
 
 	switch (key) {
 	case GLFW_KEY_ESCAPE:
@@ -114,19 +126,27 @@ key_callback(GLFWwindow *win, i32 key, i32 sc, i32 action, i32 mod)
 		break;
 	case GLFW_KEY_W:
 		if (action == GLFW_PRESS || action == GLFW_REPEAT)
-			g_glctx.boundary = move_rect(g_glctx.boundary, (v2){.y = delta});
+			g_glctx.dP.y = dP.y;
+		else if (action == GLFW_RELEASE)
+			g_glctx.dP.y = 0;
 		break;
 	case GLFW_KEY_A:
 		if (action == GLFW_PRESS || action == GLFW_REPEAT)
-			g_glctx.boundary = move_rect(g_glctx.boundary, (v2){.x = -delta});
+			g_glctx.dP.x = -dP.x;
+		else if (action == GLFW_RELEASE)
+			g_glctx.dP.x = 0;
 		break;
 	case GLFW_KEY_S:
 		if (action == GLFW_PRESS || action == GLFW_REPEAT)
-			g_glctx.boundary = move_rect(g_glctx.boundary, (v2){.y = -delta});
+			g_glctx.dP.y = -dP.y;
+		else if (action == GLFW_RELEASE)
+			g_glctx.dP.y = 0;
 		break;
 	case GLFW_KEY_D:
 		if (action == GLFW_PRESS || action == GLFW_REPEAT)
-			g_glctx.boundary = move_rect(g_glctx.boundary, (v2){.x = delta});
+			g_glctx.dP.x = dP.x;
+		else if (action == GLFW_RELEASE)
+			g_glctx.dP.x = 0;
 		break;
 	}
 }
@@ -134,9 +154,19 @@ key_callback(GLFWwindow *win, i32 key, i32 sc, i32 action, i32 mod)
 static void
 scroll_callback(GLFWwindow *win, f64 xdelta, f64 ydelta)
 {
-	f32 scale = glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) ? 5 : 1;
-	g_glctx.zoom += scale * ydelta;
-	if (g_glctx.zoom < 1.0) g_glctx.zoom = 1.0;
+	v2 delta = sub_v2(g_glctx.boundary.top_left, g_glctx.boundary.bottom_right);
+
+	f32 scale = glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) ? 0.2 : 0.05;
+
+	g_glctx.zoom += ydelta * 1/scale;
+	if (g_glctx.zoom < 1) g_glctx.zoom = 1;
+
+	delta.x = ABS(delta.x) * scale * 0.5 * ydelta;
+	delta.y = ABS(delta.y) * scale * 0.5 * ydelta;
+	g_glctx.boundary.top_left.x += delta.x;
+	g_glctx.boundary.top_left.y -= delta.y;
+	g_glctx.boundary.bottom_right.x -= delta.x;
+	g_glctx.boundary.bottom_right.y += delta.y;
 }
 
 static void
@@ -155,8 +185,8 @@ mouse_button_callback(GLFWwindow *win, i32 btn, i32 act, i32 mod)
 #endif
 
 	if (btn == GLFW_MOUSE_BUTTON_RIGHT && act == GLFW_PRESS) {
-		g_glctx.zoom = 1;
 		g_glctx.boundary = default_boundary;
+		g_glctx.dP = (v2){0};
 	}
 }
 
@@ -213,7 +243,7 @@ spawn_window(void)
 	glfwMakeContextCurrent(g_glctx.window);
 
 	/* disable vsync */
-	glfwSwapInterval(0);
+	//glfwSwapInterval(0);
 
 	glfwSetFramebufferSizeCallback(g_glctx.window, fb_callback);
 	glfwSetKeyCallback(g_glctx.window, key_callback);
@@ -292,7 +322,6 @@ static void
 validate_uniforms(void)
 {
 	g_glctx.u_screen_dim = glGetUniformLocation(g_glctx.pid, "u_screen_dim");
-	g_glctx.u_zoom       = glGetUniformLocation(g_glctx.pid, "u_zoom");
 	g_glctx.u_top_left   = glGetUniformLocation(g_glctx.pid, "u_top_left");
 	g_glctx.u_bottom_right   = glGetUniformLocation(g_glctx.pid, "u_bottom_right");
 }
@@ -301,6 +330,8 @@ int
 main(void)
 {
 	Arena memory = get_arena();
+
+	g_glctx.boundary = default_boundary;
 
 	if (!glfwInit())
 		return -1;
@@ -324,8 +355,6 @@ main(void)
 	}
 	glUseProgram(g_glctx.pid);
 	validate_uniforms();
-	g_glctx.zoom = 1.0;
-	g_glctx.boundary = default_boundary;
 
 	u32 fcount = 0;
 	f32 last_time = 0;
@@ -336,11 +365,13 @@ main(void)
 		f32 dt = current_time - last_time;
 		last_time = current_time;
 		if (++fcount > 1000) {
-			printf("FPS: %0.03f | dt = %0.03f [ms] | zoom = %0.01f\n"
+			printf("FPS: %0.03f | dt = %0.03f [ms]\n"
 			       "bounds = { { %0.04f, %0.04f }, { %0.04f, %0.04f } }\n",
-			       1 / dt, dt * 1e3, g_glctx.boundary.top_left.x,
-			       g_glctx.boundary.top_left.y, g_glctx.boundary.bottom_right.x,
-			       g_glctx.boundary.bottom_right.y, g_glctx.zoom);
+			       1 / dt, dt * 1e3,
+			       g_glctx.boundary.top_left.x,
+			       g_glctx.boundary.top_left.y,
+			       g_glctx.boundary.bottom_right.x,
+			       g_glctx.boundary.bottom_right.y);
 			fcount = 0;
 		}
 
@@ -361,10 +392,15 @@ main(void)
 			}
 		}
 
+		v2 v = g_glctx.dP;
+		v2 delta;
+		delta.x = v.x * dt;
+		delta.y = v.y * dt;
+		g_glctx.boundary = move_rect(g_glctx.boundary, delta);
+
 		glUniform2fv(g_glctx.u_top_left, 1, (f32 *)&g_glctx.boundary.top_left);
 		glUniform2fv(g_glctx.u_bottom_right, 1, (f32 *)&g_glctx.boundary.bottom_right);
 		glUniform2ui(g_glctx.u_screen_dim, g_glctx.width, g_glctx.height);
-		glUniform1f(g_glctx.u_zoom, g_glctx.zoom);
 		clear_colour(g_glctx.clear_colour);
 		glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 		glfwSwapBuffers(g_glctx.window);
