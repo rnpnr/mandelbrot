@@ -7,6 +7,32 @@ uniform uvec2 u_screen_dim;
 uniform vec2  u_top_left;
 uniform vec2  u_bottom_right;
 
+const int   iterations    = 300;
+const float escape_radius = 4.0;
+
+vec3 hsv2rgb(vec3 hsv)
+{
+	//hsv.x = mod(100 + hsv.x, 1);
+	float hslice  = 6 * hsv.x;
+	float hsint   = floor(hslice);
+	float hinterp = hslice - hsint;
+
+	vec3 tmp = vec3(hsv.z * (1 - hsv.y),
+	                hsv.z * (1 - hsv.y * hinterp),
+	                hsv.z * (1 - hsv.y * hinterp));
+
+	float isodd    = mod(hsint, 2.0);
+	float slicesel =  0.5 * (hsint - isodd);
+
+	vec3 rgbeven = vec3(hsv.z, tmp.zx);
+	vec3 rgbodd  = vec3(tmp.y, hsv.z, tmp.x);
+	vec3 rgb     = mix(rgbeven, rgbodd, isodd);
+
+	float notfirst  = clamp(slicesel,     0, 1);
+	float notsecond = clamp(slicesel - 1, 0, 1);
+	return mix(rgb.xyz, mix(rgb.zxy, rgb.yzx, notsecond), notfirst);
+}
+
 vec3 wavelength2rgb(float lambda)
 {
 	vec3 rgb = vec3(0);
@@ -55,34 +81,37 @@ vec3 wavelength2rgb(float lambda)
 vec2 map_mandelbrot(vec2 v)
 {
 	vec2 scale = abs(u_top_left - u_bottom_right);
-	v *= scale;
-	return vec2(u_top_left.x, u_bottom_right.y) + v;
+	return vec2(u_top_left.x, u_bottom_right.y) + v * scale;
 }
 
 void main()
 {
-	float aspect = u_screen_dim.x / u_screen_dim.y;
-	vec2 xy0 = map_mandelbrot(gl_FragCoord.xy / u_screen_dim.xy);
+	vec2 vf = gl_FragCoord.xy / u_screen_dim.xy;
+	vec2 xy0 = map_mandelbrot(vf);
 
 	int i;
 	float xx = 0, yy = 0;
-	vec2 xy  = xy0;
-	for (i = 0; i < 300 && xx + yy < 10.0; i++) {
+	vec2 xy = xy0;
+	for (i = 0; i < iterations && xx + yy < escape_radius; i++) {
 		xx = xy.x * xy.x;
 		yy = xy.y * xy.y;
 		xy = vec2(xx - yy + xy0.x, 2 * xy.x * xy.y + xy0.y);
 	}
 
 	/* extra iterations to reduce error in escape calculation */
+	/* fun value j = 5 */
 	for (int j = 0; j < 2; j++) {
 		xx = xy.x * xy.x;
 		yy = xy.y * xy.y;
 		xy = vec2(xx - yy + xy0.x, 2 * xy.x * xy.y + xy0.y);
 	}
 
-	float mu = i - log(log(sqrt(xx + yy))) / log(2.0);
-	mu = clamp(mu, 0, 300);
-	//float q = pow(mu / 300, 0.2);
-	float q = mu / 300;
+	float zmag = sqrt(xx + yy);
+	float mu = i - log(log(zmag)) / log(2.0);
+	mu = clamp(mu, 0, iterations);
+	float q = pow(mu / iterations, 0.8);
+	//float q = pow(mu / iterations, 0.69);
+	//float q = mu / iterations;
+	//colour = vec4(hsv2rgb(vec3(q, 0.8, 0.8)), 1.0);
 	colour = vec4(wavelength2rgb(400.0 + 300 * q).xyz, 1.0);
 }
