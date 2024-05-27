@@ -13,27 +13,13 @@ uniform bool u_use_approx = false;
 const int   iterations    = 300;
 const float escape_radius = 4.0;
 
+/* input:  h [0,360] | s,v [0, 1] *
+ * output: rgb [0,1]              */
 vec3 hsv2rgb(vec3 hsv)
 {
-	//hsv.x = mod(100 + hsv.x, 1);
-	float hslice  = 6 * hsv.x;
-	float hsint   = floor(hslice);
-	float hinterp = hslice - hsint;
-
-	vec3 tmp = vec3(hsv.z * (1 - hsv.y),
-	                hsv.z * (1 - hsv.y * hinterp),
-	                hsv.z * (1 - hsv.y * hinterp));
-
-	float isodd    = mod(hsint, 2.0);
-	float slicesel =  0.5 * (hsint - isodd);
-
-	vec3 rgbeven = vec3(hsv.z, tmp.zx);
-	vec3 rgbodd  = vec3(tmp.y, hsv.z, tmp.x);
-	vec3 rgb     = mix(rgbeven, rgbodd, isodd);
-
-	float notfirst  = clamp(slicesel,     0, 1);
-	float notsecond = clamp(slicesel - 1, 0, 1);
-	return mix(rgb.xyz, mix(rgb.zxy, rgb.yzx, notsecond), notfirst);
+	vec3 k = mod(vec3(5, 3, 1) + hsv.x / 60, 6);
+	k = max(min(min(k, 4 - k), 1), 0);
+	return hsv.z - hsv.z * hsv.y * k;
 }
 
 vec3 wavelength2rgb(float lambda)
