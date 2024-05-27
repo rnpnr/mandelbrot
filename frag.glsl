@@ -7,6 +7,9 @@ uniform uvec2 u_screen_dim;
 uniform vec2  u_top_left;
 uniform vec2  u_bottom_right;
 
+uniform vec2 u_z_n[300];
+uniform bool u_use_approx = false;
+
 const int   iterations    = 300;
 const float escape_radius = 4.0;
 
@@ -84,26 +87,45 @@ vec2 map_mandelbrot(vec2 v)
 	return vec2(u_top_left.x, u_bottom_right.y) + v * scale;
 }
 
+vec2 complex_mult(vec2 a, vec2 b)
+{
+	vec2 result;
+	result.x = a.x * a.x - b.y * b.y;
+	result.y = 2 * a.x * b.y;
+	return result;
+}
+
 void main()
 {
 	vec2 vf = gl_FragCoord.xy / u_screen_dim.xy;
-	vec2 xy0 = map_mandelbrot(vf);
+	vec2 d  = map_mandelbrot(vf);
 
 	int i;
+	vec2 z = u_use_approx ? u_z_n[0] : d;
+	vec2 e = vec2(0);
 	float xx = 0, yy = 0;
-	vec2 xy = xy0;
-	for (i = 0; i < iterations && xx + yy < escape_radius; i++) {
-		xx = xy.x * xy.x;
-		yy = xy.y * xy.y;
-		xy = vec2(xx - yy + xy0.x, 2 * xy.x * xy.y + xy0.y);
+
+	if (u_use_approx) {
+		for (i = 0; i < iterations && xx + yy < escape_radius; i++) {
+			xx = z.x * z.x;
+			yy = z.y * z.y;
+			e = complex_mult(2 * u_z_n[i], e) + complex_mult(e, e) + d;
+			z = u_z_n[i] + e;
+		}
+	} else {
+		for (i = 0; i < iterations && xx + yy < escape_radius; i++) {
+			xx = z.x * z.x;
+			yy = z.y * z.y;
+			z  = vec2(xx - yy + d.x, 2 * z.x * z.y + d.y);
+		}
 	}
 
 	/* extra iterations to reduce error in escape calculation */
 	/* fun value j = 5 */
 	for (int j = 0; j < 2; j++) {
-		xx = xy.x * xy.x;
-		yy = xy.y * xy.y;
-		xy = vec2(xx - yy + xy0.x, 2 * xy.x * xy.y + xy0.y);
+		xx = z.x * z.x;
+		yy = z.y * z.y;
+		z  = vec2(xx - yy + d.x, 2 * z.x * z.y + d.y);
 	}
 
 	float zmag = sqrt(xx + yy);

@@ -29,8 +29,11 @@ typedef struct { u8 *beg, *end; } Arena;
 
 #define ABS(x)           ((x) <= 0 ? -(x) : (x))
 #define BETWEEN(x, l, h) ((x) >= (l) && (x) <= (h))
+#define ARRAY_COUNT(a)   (sizeof(a) / sizeof(*a))
 
 #define EPS 0.00001f
+
+#define MAX_ITERATIONS 300
 
 #include "util.c"
 
@@ -50,13 +53,28 @@ static struct {
 	u32 vao, vbo;
 	i32 pid;
 	i32 height, width;
-	i32 u_screen_dim, u_top_left, u_bottom_right;
+	union {
+		struct {
+			i32 screen_dim, z_n;
+			i32 top_left, bottom_right;
+			i32 use_approx;
+		};
+		i32 E[5];
+	} uniforms;
 	v2  dP;
 	Rect boundary;
 	f32 zoom;
+	v2 *z_n;
 	Colour clear_colour;
 } g_glctx;
 
+static const char *uniform_names[] = {
+	"u_screen_dim",
+	"u_z_n",
+	"u_top_left",
+	"u_bottom_right",
+	"u_use_approx",
+};
 
 static Rect default_boundary = {
 	.top_left     = (v2){ .x = -2.5, .y =  1.5 },
@@ -71,6 +89,21 @@ move_rect(Rect r, v2 delta)
 	r.bottom_right.x += delta.x;
 	r.bottom_right.y += delta.y;
 	return r;
+}
+
+static v2
+rect_center(Rect r)
+{
+	return (v2) {
+		.x = r.bottom_right.x - r.top_left.x,
+		.y = r.top_left.y - r.bottom_right.y,
+	};
+}
+
+static f32
+magnitude_v2(v2 v)
+{
+	return v.x * v.x + v.y * v.y;
 }
 
 static v2
@@ -170,6 +203,19 @@ scroll_callback(GLFWwindow *win, f64 xdelta, f64 ydelta)
 }
 
 static void
+recalculate_z_n(void)
+{
+	v2 *z_n = g_glctx.z_n;
+	z_n[0] = rect_center(g_glctx.boundary);
+	for (u32 i = 1; i < MAX_ITERATIONS; i++) {
+		f32 xx = z_n[i - 1].x * z_n[i - 1].x;
+		f32 yy = z_n[i - 1].y * z_n[i - 1].y;
+		z_n[i].x = xx - yy + z_n[0].x;
+		z_n[i].y = 2 * z_n[i - 1].x * z_n[i - 1].y + z_n[0].y;
+	}
+}
+
+static void
 mouse_button_callback(GLFWwindow *win, i32 btn, i32 act, i32 mod)
 {
 #if 0
@@ -187,6 +233,10 @@ mouse_button_callback(GLFWwindow *win, i32 btn, i32 act, i32 mod)
 	if (btn == GLFW_MOUSE_BUTTON_RIGHT && act == GLFW_PRESS) {
 		g_glctx.boundary = default_boundary;
 		g_glctx.dP = (v2){0};
+		g_glctx.zoom = 1.0;
+		recalculate_z_n();
+		glUniform2fv(g_glctx.uniforms.z_n, MAX_ITERATIONS,
+		             (f32 *)g_glctx.z_n);
 	}
 }
 
@@ -234,7 +284,6 @@ spawn_window(void)
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-	g_glctx.u_screen_dim = -1;
 	g_glctx.window = glfwCreateWindow(g_glctx.width, g_glctx.height,
 	                                  "Mandelbrot Viewer", NULL, NULL);
 	if (g_glctx.window == NULL)
@@ -321,15 +370,45 @@ get_arena(void)
 static void
 validate_uniforms(void)
 {
-	g_glctx.u_screen_dim = glGetUniformLocation(g_glctx.pid, "u_screen_dim");
-	g_glctx.u_top_left   = glGetUniformLocation(g_glctx.pid, "u_top_left");
-	g_glctx.u_bottom_right   = glGetUniformLocation(g_glctx.pid, "u_bottom_right");
+	for (u32 i = 0; i < ARRAY_COUNT(g_glctx.uniforms.E); i++) {
+		i32 uid = glGetUniformLocation(g_glctx.pid, uniform_names[i]);
+		g_glctx.uniforms.E[i] = uid;
+	}
 }
+
+#if 0
+static v2
+map_screen_to_rect(Rect bounds, v2 screen_pos)
+{
+	ASSERT(BETWEEN(screen_pos.x, 0, 1.0) && BETWEEN(screen_pos.y, 0, 1.0));
+
+	v2 size   = {
+		.x = ABS(bounds.bottom_right.x - bounds.top_left.x),
+		.y = ABS(bounds.top_left.y - bounds.bottom_right.y),
+	};
+
+	return (v2){
+		.x = bounds.top_left.x + size.x * screen_pos.x,
+		.y = bounds.bottom_right.y + size.y * screen_pos.y,
+	};
+}
+
+static void
+print_motion(void)
+{
+	v2 dP  = g_glctx.dP;
+	v2 ddP = g_glctx.ddP;
+	printf("dP  = { .x = %0.02f, .y = %0.02f }\n", dP.x, dP.y);
+	printf("ddP = { .x = %0.02f, .y = %0.02f }\n", ddP.x, ddP.y);
+}
+#endif
 
 int
 main(void)
 {
 	Arena memory = get_arena();
+	g_glctx.z_n = alloc(&memory, v2, MAX_ITERATIONS);
+	g_glctx.zoom = 1.0;
 
 	g_glctx.boundary = default_boundary;
 
@@ -364,14 +443,15 @@ main(void)
 		f32 current_time = glfwGetTime();
 		f32 dt = current_time - last_time;
 		last_time = current_time;
-		if (++fcount > 1000) {
-			printf("FPS: %0.03f | dt = %0.03f [ms]\n"
-			       "bounds = { { %0.04f, %0.04f }, { %0.04f, %0.04f } }\n",
-			       1 / dt, dt * 1e3,
-			       g_glctx.boundary.top_left.x,
-			       g_glctx.boundary.top_left.y,
-			       g_glctx.boundary.bottom_right.x,
-			       g_glctx.boundary.bottom_right.y);
+
+		i32 ua = 1.0e-8 > magnitude_v2(sub_v2(g_glctx.boundary.top_left,
+		                                      g_glctx.boundary.bottom_right));
+
+		if (++fcount > 300) {
+			v2 bound_cent = rect_center(g_glctx.boundary);
+			printf("FPS: %0.03f | dt = %0.03f [ms] | approx = %d\n"
+			       "Center: <%f, %f>\n",
+			       1 / dt, dt * 1e3, ua, bound_cent.x, bound_cent.y);
 			fcount = 0;
 		}
 
@@ -398,9 +478,21 @@ main(void)
 		delta.y = v.y * dt;
 		g_glctx.boundary = move_rect(g_glctx.boundary, delta);
 
-		glUniform2fv(g_glctx.u_top_left, 1, (f32 *)&g_glctx.boundary.top_left);
-		glUniform2fv(g_glctx.u_bottom_right, 1, (f32 *)&g_glctx.boundary.bottom_right);
-		glUniform2ui(g_glctx.u_screen_dim, g_glctx.width, g_glctx.height);
+		if (ua) {
+			recalculate_z_n();
+			glUniform2fv(g_glctx.uniforms.z_n, MAX_ITERATIONS,
+			             (f32 *)g_glctx.z_n);
+		}
+
+		glUniform2fv(g_glctx.uniforms.top_left, 1,
+		             (f32 *)&g_glctx.boundary.top_left);
+		glUniform2fv(g_glctx.uniforms.bottom_right, 1,
+		             (f32 *)&g_glctx.boundary.bottom_right);
+		glUniform2ui(g_glctx.uniforms.screen_dim,
+		             g_glctx.width, g_glctx.height);
+
+		glUniform1i(g_glctx.uniforms.use_approx, ua);
+
 		clear_colour(g_glctx.clear_colour);
 		glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 		glfwSwapBuffers(g_glctx.window);
